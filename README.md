@@ -2,7 +2,8 @@
 
 The CLI utility wraps calls to [Boomi Atomsphere APIs](https://help.boomi.com/bundle/integration/page/r-atm-AtomSphere_API_6730e8e4-b2db-4e94-a653-82ae1d05c78e.html). Handles input and output JSON files and performance orchestration for deploying and managing Boomi runtimes, components and metadata required for CI/CD. 
 
-[Stable version](https://github.com/anthonyrabiaza/Boomi/raw/master/boomicicd-cli/boomicicd-cli-20210203.zip)
+You can download Boomi CI/CD stable version [here](https://github.com/anthonyrabiaza/Boomi/raw/master/boomicicd-cli/boomicicd-cli-20210203.zip)
+You can download Boomi Secret Manager stable full version [here]([https://github.com/anthonyrabiaza/Boomi/raw/master/boomicicd-cli/boomicicd-cli-20210203.zip](https://github.com/anthonyrabiaza/Boomi/raw/master/boomisecretmanager/boomisecretmanager-20210804-full.zip))
   
 ## Pre-requistes
   - The CLI utility currently runs on any Unix OS and invokes BASH shell scripts
