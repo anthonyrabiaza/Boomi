@@ -1,6 +1,6 @@
-# Boomi CI/CD and Boomi Secret Manager
+# Boomi CI/CD CLI and Boomi Secret Manager
 
-You can download Boomi CI/CD stable version [here](https://github.com/anthonyrabiaza/Boomi/raw/master/boomicicd-cli/boomicicd-cli-20210203.zip)
+You can download Boomi CI/CD CLI stable version [here](https://github.com/anthonyrabiaza/Boomi/raw/master/boomicicd-cli/boomicicd-cli-20210203.zip)
 
 You can download Boomi Secret Manager stable full version [here](https://github.com/anthonyrabiaza/Boomi/raw/master/boomisecretmanager/boomisecretmanager-20210804-full.zip)
   
