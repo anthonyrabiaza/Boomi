@@ -1,4 +1,4 @@
-**Some scripts which might be helpfull running Boomi in a Container Orchestration Platform**
+**Some scripts which might be helpful running Boomi in a Container Orchestration Platform**
 
 Just run the following command the root folder of your shared directory:
 
