@@ -29,7 +29,6 @@ The CLI utility wraps calls to [Boomi Atomsphere APIs](https://help.boomi.com/bu
         ## Using apt
         $ apt-get install -y jq 
         $ apt-get install -y libxml2-utils
-        $ apt-get install -y libxml2-utils
 
 ## Set up
 Clone the scripts folder on to a Unix Machine. The scripts folder contains the following directories. 
