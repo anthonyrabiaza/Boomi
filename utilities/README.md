@@ -14,9 +14,9 @@ When migrating or auditing Boomi processes, it's important to know which process
 
 | Platform | File | Location |
 |----------|------|----------|
-| Linux/macOS | `find-boomi-custom-scripts.sh` | `src/utilities/` |
-| Windows | `find-boomi-custom-scripts.ps1` | `src/utilities/` |
-| Windows | `find-boomi-custom-scripts.bat` | `src/utilities/` |
+| Linux/macOS | `find-boomi-custom-scripts.sh` | `utilities/` |
+| Windows | `find-boomi-custom-scripts.ps1` | `utilities/` |
+| Windows | `find-boomi-custom-scripts.bat` | `utilities/` |
 
 ### Usage
 
@@ -58,20 +58,21 @@ find-boomi-custom-scripts.bat C:\boomi\Boomi_AtomSphere\Atom\Atom_runtime\proces
 The script outputs CSV format to stdout with **one line per custom script**:
 
 ```csv
-process_id,process_name,shape_name,script_language,folder
-5041adc7-8c59-4628-be7e-625da0f88014,"This is an old process","dataprocess (before documentproperties)","Groovy 1.5","Boomi_Account/Project/Legacy"
-5041adc7-8c59-4628-be7e-625da0f88014,"This is an old process","dataprocess (before stop)","Groovy 1.5","Boomi_Account/Project/Legacy"
-545ed398-71f8-4683-b26b-5443b3e907f7,"This is a main process","dataprocess (before documentproperties)","Groovy 2.4","Boomi_Account/PSO/Customers/CIDI"
-911c099b-127c-4f50-8fcf-81bb3b88ca86,"This is a sub-process","dataprocess (before stop)","Groovy 1.5","Boomi_Account/PSO/Customers/CIDI"
-f1437ef8-3ef0-4013-a890-c1d65205b9e6,"One process with JavaScript","dataprocess-JS Shape (before stop)","JavaScript","Boomi_Account/PSO/Customers/CIDI"
-f613ef44-fbed-4ca1-9348-75f679bc1095,"(Main) Artefacts Shrinker","dataprocess-ZipShrinker (before documentproperties)","Groovy 1.5","Boomi_Account/Migrations"
+component_id,component_name,component_type,shape_name,script_language,folder
+5041adc7-8c59-4628-be7e-625da0f88014,"This is an old process","process","dataprocess (before documentproperties)","Groovy 1.5","Boomi_Account/Project/Legacy"
+5041adc7-8c59-4628-be7e-625da0f88014,"This is an old process","process","dataprocess (before stop)","Groovy 1.5","Boomi_Account/Project/Legacy"
+545ed398-71f8-4683-b26b-5443b3e907f7,"This is a main process","process","dataprocess (before documentproperties)","Groovy 2.4","Boomi_Account/PSO/Customers/CIDI"
+911c099b-127c-4f50-8fcf-81bb3b88ca86,"This is a sub-process","process","dataprocess (before stop)","Groovy 1.5","Boomi_Account/PSO/Customers/CIDI"
+f1437ef8-3ef0-4013-a890-c1d65205b9e6,"One process with JavaScript","process","dataprocess-JS Shape (before stop)","JavaScript","Boomi_Account/PSO/Customers/CIDI"
+a1b2c3d4-5e6f-7890-abcd-ef1234567890,"Customer Mapping","transform.map","Scripting","Groovy 2.4","Boomi_Account/PSO/Customers/CIDI"
 ```
 
 | Column | Description |
 |--------|-------------|
-| `process_id` | The Boomi component ID (UUID) |
-| `process_name` | The process name (commas replaced with semicolons for CSV safety) |
-| `shape_name` | The shape containing the script, formatted as `{shapetype}-{userlabel} (before {next_shapetype})` |
+| `component_id` | The Boomi component ID (UUID) |
+| `component_name` | The component name (commas replaced with semicolons for CSV safety) |
+| `component_type` | The component type: `process`, `transform.map`, or `transform.function` |
+| `shape_name` | For processes: `{shapetype}-{userlabel} (before {next_shapetype})`. For maps/functions: the FunctionStep name (e.g., "Scripting") |
 | `script_language` | `Groovy 1.5`, `Groovy 2.4`, or `JavaScript` |
 | `folder` | The Boomi folder path from the FolderId element |
 
