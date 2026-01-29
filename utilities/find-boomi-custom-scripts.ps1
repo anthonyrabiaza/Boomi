@@ -28,6 +28,8 @@
 #   - For processes: shape_name is formatted as "{shapetype}-{userlabel} (before {next_shapetype})"
 #   - For maps/functions: shape_name is the FunctionStep name (e.g., "Scripting")
 #   - folder shows the Boomi folder path from the FolderId element
+#   - When a dataprocessscript has a componentId attribute (referencing a script component),
+#     the language is taken from the referenced component's ProcessingScript element
 #
 
 param(
@@ -64,7 +66,10 @@ foreach ($xmlFile in $xmlFiles) {
         $content = Get-Content $xmlFile.FullName -Raw
 
         # Check if file contains scripts: either dataprocessscript (processes) or Scripting (maps/functions)
-        if ($content -match '(dataprocessscript.*language="(groovy|javascript)|<Scripting language="(groovy|javascript))') {
+        # Use separate checks to handle multi-line XML tags
+        $hasDataProcessScript = ($content -match 'dataprocessscript') -and ($content -match 'language="(groovy|javascript)')
+        $hasScripting = $content -match '<Scripting language="(groovy|javascript)'
+        if ($hasDataProcessScript -or $hasScripting) {
 
             # Extract the component ID from <Id> tag
             $componentId = $null
@@ -116,6 +121,19 @@ foreach ($xmlFile in $xmlFiles) {
                     # Check if this shape contains a dataprocessscript
                     if ($shapeBody -match '<dataprocessscript[^>]*?language="([^"]*)"') {
                         $language = $Matches[1]
+
+                        # Check if there's a componentId override - if so, get language from referenced component
+                        if ($shapeBody -match '<dataprocessscript[^>]*?componentId="([^"]*)"') {
+                            $refComponentId = $Matches[1]
+                            $refFile = Join-Path (Split-Path $xmlFile.FullName) "$refComponentId.xml"
+                            if (Test-Path $refFile) {
+                                $refContent = Get-Content $refFile -Raw
+                                # Extract language from ProcessingScript element
+                                if ($refContent -match '<ProcessingScript\s+language="([^"]*)"') {
+                                    $language = $Matches[1]
+                                }
+                            }
+                        }
 
                         # Extract attributes from shape tag
                         $userlabel = ""

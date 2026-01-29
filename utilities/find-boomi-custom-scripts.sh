@@ -29,6 +29,8 @@
 #   - For processes: shape_name is formatted as "{shapetype}-{userlabel} (before {next_shapetype})"
 #   - For maps/functions: shape_name is the FunctionStep name (e.g., "Scripting")
 #   - folder shows the Boomi folder path from the FolderId element
+#   - When a dataprocessscript has a componentId attribute (referencing a script component),
+#     the language is taken from the referenced component's ProcessingScript element
 #
 
 set -e
@@ -57,7 +59,9 @@ trap "rm -f $temp_file" EXIT
 # Find all XML files and process them
 find "$PROCESSES_FOLDER" -name "*.xml" -type f | while read -r xml_file; do
     # Check if file contains scripts: either dataprocessscript (processes) or Scripting (maps/functions)
-    if grep -qE '(dataprocessscript.*language="(groovy|javascript)|<Scripting language="(groovy|javascript))' "$xml_file" 2>/dev/null; then
+    # Use separate checks to handle multi-line XML tags
+    if grep -q 'dataprocessscript' "$xml_file" 2>/dev/null && grep -qE 'language="(groovy|javascript)' "$xml_file" 2>/dev/null || \
+       grep -qE '<Scripting language="(groovy|javascript)' "$xml_file" 2>/dev/null; then
 
         # Extract the component ID from <Id> tag
         component_id=$(grep -o '<Id>[^<]*</Id>' "$xml_file" | head -1 | sed 's/<Id>//;s/<\/Id>//')
@@ -72,12 +76,16 @@ find "$PROCESSES_FOLDER" -name "*.xml" -type f | while read -r xml_file; do
         # Extract the Boomi folder path from FolderId name attribute
         folder=$(grep -o '<FolderId name="[^"]*"' "$xml_file" | head -1 | sed 's/<FolderId name="//;s/"$//')
 
+        # Get the directory of the current XML file (for looking up referenced components)
+        xml_dir=$(dirname "$xml_file")
+
         # Read the file content
         content=$(cat "$xml_file")
 
         # Use perl to extract scripts from processes (dataprocessscript) and maps/functions (Scripting)
         # This handles both single-line and multi-line XML
-        echo "$content" | perl -0777 -ne '
+        # Pass the directory path as an argument for looking up referenced components
+        echo "$content" | perl -0777 -sne '
             my $component_type = "";
             if (/<Type>([^<]*)<\/Type>/) {
                 $component_type = $1;
@@ -104,6 +112,21 @@ find "$PROCESSES_FOLDER" -name "*.xml" -type f | while read -r xml_file; do
                     # Check if this shape contains a dataprocessscript
                     next unless $body =~ /<dataprocessscript[^>]*?language="([^"]*)"/;
                     my $language = $1;
+
+                    # Check if there is a componentId override - if so, get language from referenced component
+                    if ($body =~ /<dataprocessscript[^>]*?componentId="([^"]*)"/) {
+                        my $ref_component_id = $1;
+                        my $ref_file = "$xml_dir/$ref_component_id.xml";
+                        if (-f $ref_file) {
+                            open(my $fh, "<", $ref_file) or next;
+                            my $ref_content = do { local $/; <$fh> };
+                            close($fh);
+                            # Extract language from ProcessingScript element
+                            if ($ref_content =~ /<ProcessingScript\s+language="([^"]*)"/) {
+                                $language = $1;
+                            }
+                        }
+                    }
 
                     # Extract attributes from shape tag (they can be in any order)
                     my $shape_name_attr = "";
@@ -176,7 +199,7 @@ find "$PROCESSES_FOLDER" -name "*.xml" -type f | while read -r xml_file; do
                     print "$shape_name\t$script_language\n";
                 }
             }
-        ' | while IFS=$'\t' read -r shape_name script_language; do
+        ' -- -xml_dir="$xml_dir" | while IFS=$'\t' read -r shape_name script_language; do
             # Output to temp file for deduplication
             echo "${component_id},\"${component_name}\",\"${component_type}\",\"${shape_name}\",\"${script_language}\",\"${folder}\"" >> "$temp_file"
         done
