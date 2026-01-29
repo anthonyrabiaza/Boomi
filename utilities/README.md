@@ -4,11 +4,18 @@ This document describes the utility scripts.
 
 ## Find Boomi Custom Scripts
 
-Scans Boomi process XML files and generates a CSV report identifying which processes contain custom scripts (Groovy or JavaScript) and their versions.
+Scans Boomi component XML files and generates a CSV report identifying which components contain custom scripts (Groovy or JavaScript) and their versions.
+
+### Supported Component Types
+
+- **process** - Data Process shapes with scripts
+- **transform.map** - Map components with Scripting function steps
+- **transform.function** - Map Function components with Scripting function steps
 
 ### Purpose
 
-When migrating or auditing Boomi processes, it's important to know which processes use custom scripts and what scripting language they use (Groovy 1.5, Groovy 2.4, or JavaScript). This utility automates that discovery by scanning the Runtime's `processes` folder.
+When migrating or auditing Boomi components, it's important to know which ones use custom scripts and what scripting language they use (Groovy 1.5, Groovy 2.4, or JavaScript). This utility automates that discovery by scanning the Atom's `processes` folder.
+
 
 ### Files
 
@@ -88,7 +95,12 @@ find-boomi-custom-scripts.bat C:\path\to\processes > custom-scripts-report.csv
 
 ### Script Language Detection
 
-The script detects scripting languages by examining the `language` attribute in `<dataprocessscript>` elements:
+The script detects scripting languages by examining the `language` attribute in:
+- `<dataprocessscript>` elements (for processes)
+- `<Scripting>` elements (for maps and functions)
+
+**Component Override Handling:** When a `dataprocessscript` has a `componentId` attribute (indicating a referenced script component), the language is extracted from the referenced component's `<ProcessingScript>` element instead of the inline `language` attribute. This ensures the reported language reflects the actual script being used.
+
 
 | XML Attribute | Script Language |
 |---------------|-----------------|
@@ -134,3 +146,4 @@ The test scripts will run the utilities against the sample processes in `src/tes
 - **Typical processes folder locations**:
   - Linux: `/data/boomi/Boomi_AtomSphere/Atom/<atom_name>/processes`
   - Windows: `C:\boomi\Boomi_AtomSphere\Atom\<atom_name>\processes`
+
