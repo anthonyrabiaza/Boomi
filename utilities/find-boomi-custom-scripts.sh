@@ -17,7 +17,7 @@
 #   ./find-boomi-custom-scripts.sh /data/boomi/Boomi_AtomSphere/Atom/Atom_runtime_basic_ec2_linux/processes
 #
 # Output: CSV format (one line per custom script)
-#   component_id,component_name,component_type,shape_name,script_language,folder
+#   process_id,process_name,component_id,component_name,component_type,shape_name,script_language,folder
 #
 # Script languages:
 #   - "groovy" in XML = Groovy 1.5
@@ -31,7 +31,7 @@
 #   - folder shows the Boomi folder path from the FolderId element
 #   - When a dataprocessscript has a componentId attribute (referencing a script component),
 #     the language is taken from the referenced component's ProcessingScript element
-#
+#   - process_id identifies the owning process for maps/functions by tracing References chains
 
 set -e
 
@@ -52,11 +52,94 @@ if [ ! -d "$PROCESSES_FOLDER" ]; then
     exit 1
 fi
 
-# Create a temporary file to store results before deduplication
+# Create temporary files for results and reference map
 temp_file=$(mktemp)
-trap "rm -f $temp_file" EXIT
+ref_map_file=$(mktemp)
+trap "rm -f $temp_file $ref_map_file" EXIT
 
-# Find all XML files and process them
+# ==========================================
+# Pass 1: Scan all XMLs to build reference maps
+# ==========================================
+# Output format: one line per XML with TYPE, NAME, and REF entries
+#   TYPE <component_id> <component_type>
+#   NAME <component_id> <component_name>
+#   REF <source_id> <source_type> <target_id>
+find "$PROCESSES_FOLDER" -name "*.xml" -type f -exec perl -0777 -ne '
+    my $id = "";
+    my $type = "";
+    my $name = "";
+    if (/<Id>([^<]*)<\/Id>/) { $id = $1; }
+    if (/<Type>([^<]*)<\/Type>/) { $type = $1; }
+    if (/<Name>([^<]*)<\/Name>/) { $name = $1; $name =~ s/,/;/g; }
+    next unless $id && $type;
+    print "TYPE $id $type\n";
+    print "NAME $id $name\n" if $name ne "";
+    # Extract all Ref compId entries from References
+    while (/<Ref\s+[^>]*compId="([^"]*)"[^>]*>/g) {
+        print "REF $id $type $1\n";
+    }
+' {} + > "$ref_map_file"
+
+# lookup_process_ids: Given a component_id and component_type, output process_id(s)
+# For processes: process_id = component_id
+# For maps: find processes that reference this map
+# For functions: find processes that directly reference this function,
+#   OR find maps that reference this function, then find processes referencing those maps
+lookup_process_ids() {
+    local comp_id="$1"
+    local comp_type="$2"
+
+    if [ "$comp_type" = "process" ] || [ "$comp_type" = "process.process" ]; then
+        echo "$comp_id"
+        return
+    fi
+
+    local found_any=false
+
+    if [ "$comp_type" = "transform.map" ]; then
+        # Find processes referencing this map
+        grep "^REF .* process $comp_id\$" "$ref_map_file" 2>/dev/null | while read -r _ src_id _ _; do
+            echo "$src_id"
+        done
+        # Check if we found any
+        if grep -q "^REF .* process $comp_id\$" "$ref_map_file" 2>/dev/null; then
+            found_any=true
+        fi
+    elif [ "$comp_type" = "transform.function" ]; then
+        # First: find processes that directly reference this function
+        grep "^REF .* process $comp_id\$" "$ref_map_file" 2>/dev/null | while read -r _ src_id _ _; do
+            echo "$src_id"
+        done
+        if grep -q "^REF .* process $comp_id\$" "$ref_map_file" 2>/dev/null; then
+            found_any=true
+        fi
+
+        # Second: find maps referencing this function, then processes referencing those maps
+        grep "^REF .* transform\.map $comp_id\$" "$ref_map_file" 2>/dev/null | while read -r _ map_id _ _; do
+            grep "^REF .* process $map_id\$" "$ref_map_file" 2>/dev/null | while read -r _ proc_id _ _; do
+                echo "$proc_id"
+            done
+        done
+        if grep -q "^REF .* transform\.map $comp_id\$" "$ref_map_file" 2>/dev/null; then
+            found_any=true
+        fi
+    fi
+
+    # If no process found, output empty line so we still get a row
+    if [ "$found_any" = false ]; then
+        echo ""
+    fi
+}
+
+# lookup_name: Given a component_id, output its name from the ref_map_file
+lookup_name() {
+    local comp_id="$1"
+    grep "^NAME $comp_id " "$ref_map_file" 2>/dev/null | head -1 | sed "s/^NAME $comp_id //"
+}
+
+# ==========================================
+# Pass 2: Find scripts in components (existing logic, augmented with process_id)
+# ==========================================
 find "$PROCESSES_FOLDER" -name "*.xml" -type f | while read -r xml_file; do
     # Check if file contains scripts: either dataprocessscript (processes) or Scripting (maps/functions)
     # Use separate checks to handle multi-line XML tags
@@ -200,16 +283,19 @@ find "$PROCESSES_FOLDER" -name "*.xml" -type f | while read -r xml_file; do
                 }
             }
         ' -- -xml_dir="$xml_dir" | while IFS=$'\t' read -r shape_name script_language; do
-            # Output to temp file for deduplication
-            echo "${component_id},\"${component_name}\",\"${component_type}\",\"${shape_name}\",\"${script_language}\",\"${folder}\"" >> "$temp_file"
+            # Look up process_id(s) and emit one row per process
+            lookup_process_ids "$component_id" "$component_type" | sort -u | while read -r process_id; do
+                process_name=$(lookup_name "$process_id")
+                echo "${process_id},\"${process_name}\",${component_id},\"${component_name}\",\"${component_type}\",\"${shape_name}\",\"${script_language}\",\"${folder}\"" >> "$temp_file"
+            done
         done
     fi
 done
 
 # Print CSV header
-echo "component_id,component_name,component_type,shape_name,script_language,folder"
+echo "process_id,process_name,component_id,component_name,component_type,shape_name,script_language,folder"
 
-# Deduplicate by component_id+shape_name (columns 1 and 4) and output sorted results
+# Deduplicate by process_id+component_id+shape_name (columns 1, 3 and 6) and output sorted results
 if [ -f "$temp_file" ] && [ -s "$temp_file" ]; then
-    sort -t',' -k1,1 -k4,4 -u "$temp_file"
+    sort -t',' -k1,1 -k3,3 -k6,6 -u "$temp_file"
 fi

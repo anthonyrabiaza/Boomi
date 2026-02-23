@@ -16,7 +16,7 @@
 #   .\find-boomi-custom-scripts.ps1 C:\boomi\Boomi_AtomSphere\Atom\Atom_runtime\processes
 #
 # Output: CSV format (one line per custom script)
-#   component_id,component_name,component_type,shape_name,script_language,folder
+#   process_id,process_name,component_id,component_name,component_type,shape_name,script_language,folder
 #
 # Script languages:
 #   - "groovy" in XML = Groovy 1.5
@@ -30,6 +30,7 @@
 #   - folder shows the Boomi folder path from the FolderId element
 #   - When a dataprocessscript has a componentId attribute (referencing a script component),
 #     the language is taken from the referenced component's ProcessingScript element
+#   - process_id identifies the owning process for maps/functions by tracing References chains
 #
 
 param(
@@ -54,13 +55,130 @@ if (-not (Test-Path $ProcessesFolder -PathType Container)) {
     exit 1
 }
 
-# HashSet to track unique entries (for deduplication by process_id + shape_name)
+# HashSet to track unique entries (for deduplication by process_id + component_id + shape_name)
 $processedEntries = @{}
 $results = @()
 
-# Find all XML files and process them
+# Find all XML files
 $xmlFiles = Get-ChildItem -Path $ProcessesFolder -Filter "*.xml" -Recurse -File
 
+# ==========================================
+# Pass 1: Scan all XMLs to build reference maps
+# ==========================================
+# componentTypeMap: component_id -> component_type
+# refsFromComponent: source_id -> @(target_id, ...)  (only for processes and maps)
+$componentTypeMap = @{}
+$componentNameMap = @{}  # component_id -> component_name (CSV-safe)
+$refsFromProcess = @{}   # process_id -> @(referenced_component_ids)
+$refsFromMap = @{}       # map_id -> @(referenced_component_ids)
+
+foreach ($xmlFile in $xmlFiles) {
+    try {
+        $content = Get-Content $xmlFile.FullName -Raw
+
+        $compId = $null
+        $compType = $null
+        $compName = ""
+        if ($content -match '<Id>([^<]+)</Id>') { $compId = $Matches[1] }
+        if ($content -match '<Type>([^<]+)</Type>') { $compType = $Matches[1] }
+        if ($content -match '<Name>([^<]+)</Name>') { $compName = $Matches[1] -replace ',', ';' }
+
+        if ($compId -and $compType) {
+            $componentTypeMap[$compId] = $compType
+            if ($compName) { $componentNameMap[$compId] = $compName }
+
+            # Extract all Ref compId entries
+            $refMatches = [regex]::Matches($content, '<Ref\s+[^>]*compId="([^"]*)"[^>]*>')
+            $refIds = @()
+            foreach ($refMatch in $refMatches) {
+                $refIds += $refMatch.Groups[1].Value
+            }
+
+            if ($compType -eq "process" -or $compType -eq "process.process") {
+                if (-not $refsFromProcess.ContainsKey($compId)) {
+                    $refsFromProcess[$compId] = @()
+                }
+                $refsFromProcess[$compId] += $refIds
+            } elseif ($compType -eq "transform.map") {
+                if (-not $refsFromMap.ContainsKey($compId)) {
+                    $refsFromMap[$compId] = @()
+                }
+                $refsFromMap[$compId] += $refIds
+            }
+        }
+    } catch {
+        # Ignore errors in pass 1
+    }
+}
+
+# Build reverse lookup: target_id -> @(process_ids that reference it)
+$processRefsReverse = @{}
+foreach ($procId in $refsFromProcess.Keys) {
+    foreach ($targetId in $refsFromProcess[$procId]) {
+        if (-not $processRefsReverse.ContainsKey($targetId)) {
+            $processRefsReverse[$targetId] = @()
+        }
+        $processRefsReverse[$targetId] += $procId
+    }
+}
+
+# Build reverse lookup: target_id -> @(map_ids that reference it)
+$mapRefsReverse = @{}
+foreach ($mapId in $refsFromMap.Keys) {
+    foreach ($targetId in $refsFromMap[$mapId]) {
+        if (-not $mapRefsReverse.ContainsKey($targetId)) {
+            $mapRefsReverse[$targetId] = @()
+        }
+        $mapRefsReverse[$targetId] += $mapId
+    }
+}
+
+# Get-ProcessIds: Given a component_id and component_type, return process_id(s)
+function Get-ProcessIds {
+    param(
+        [string]$CompId,
+        [string]$CompType
+    )
+
+    if ($CompType -eq "process" -or $CompType -eq "process.process") {
+        return @($CompId)
+    }
+
+    $processIds = @()
+
+    if ($CompType -eq "transform.map") {
+        # Find processes that reference this map
+        if ($processRefsReverse.ContainsKey($CompId)) {
+            $processIds += $processRefsReverse[$CompId]
+        }
+    } elseif ($CompType -eq "transform.function") {
+        # Direct: find processes that reference this function
+        if ($processRefsReverse.ContainsKey($CompId)) {
+            $processIds += $processRefsReverse[$CompId]
+        }
+        # Indirect: find maps referencing this function, then processes referencing those maps
+        if ($mapRefsReverse.ContainsKey($CompId)) {
+            foreach ($mapId in $mapRefsReverse[$CompId]) {
+                if ($processRefsReverse.ContainsKey($mapId)) {
+                    $processIds += $processRefsReverse[$mapId]
+                }
+            }
+        }
+    }
+
+    # Deduplicate
+    $processIds = $processIds | Select-Object -Unique
+
+    if ($processIds.Count -eq 0) {
+        return @("")
+    }
+
+    return $processIds
+}
+
+# ==========================================
+# Pass 2: Find scripts in components
+# ==========================================
 foreach ($xmlFile in $xmlFiles) {
     try {
         $content = Get-Content $xmlFile.FullName -Raw
@@ -96,6 +214,9 @@ foreach ($xmlFile in $xmlFiles) {
             if ($content -match '<FolderId name="([^"]*)"') {
                 $folder = $Matches[1]
             }
+
+            # Look up process_id(s) for this component
+            $processIds = Get-ProcessIds -CompId $componentId -CompType $componentType
 
             # For processes: extract from shape elements with dataprocessscript
             if ($componentType -eq "process" -or $componentType -eq "process.process") {
@@ -167,23 +288,31 @@ foreach ($xmlFile in $xmlFiles) {
                             default      { $language }
                         }
 
-                        # Create unique key for deduplication
-                        $uniqueKey = "$componentId|$shapeName"
+                        # Emit one row per process_id
+                        foreach ($processId in $processIds) {
+                            # Create unique key for deduplication
+                            $uniqueKey = "$processId|$componentId|$shapeName"
 
-                        # Skip if we've already processed this entry
-                        if ($processedEntries.ContainsKey($uniqueKey)) {
-                            continue
-                        }
-                        $processedEntries[$uniqueKey] = $true
+                            # Skip if we've already processed this entry
+                            if ($processedEntries.ContainsKey($uniqueKey)) {
+                                continue
+                            }
+                            $processedEntries[$uniqueKey] = $true
 
-                        # Add to results
-                        $results += [PSCustomObject]@{
-                            component_id = $componentId
-                            component_name = $componentName
-                            component_type = $componentType
-                            shape_name = $shapeName
-                            script_language = $scriptLanguage
-                            folder = $folder
+                            # Look up process name
+                            $processName = if ($componentNameMap.ContainsKey($processId)) { $componentNameMap[$processId] } else { "" }
+
+                            # Add to results
+                            $results += [PSCustomObject]@{
+                                process_id = $processId
+                                process_name = $processName
+                                component_id = $componentId
+                                component_name = $componentName
+                                component_type = $componentType
+                                shape_name = $shapeName
+                                script_language = $scriptLanguage
+                                folder = $folder
+                            }
                         }
                     }
                 }
@@ -215,23 +344,31 @@ foreach ($xmlFile in $xmlFiles) {
                             default      { $language }
                         }
 
-                        # Create unique key for deduplication
-                        $uniqueKey = "$componentId|$shapeName"
+                        # Emit one row per process_id
+                        foreach ($processId in $processIds) {
+                            # Create unique key for deduplication
+                            $uniqueKey = "$processId|$componentId|$shapeName"
 
-                        # Skip if we've already processed this entry
-                        if ($processedEntries.ContainsKey($uniqueKey)) {
-                            continue
-                        }
-                        $processedEntries[$uniqueKey] = $true
+                            # Skip if we've already processed this entry
+                            if ($processedEntries.ContainsKey($uniqueKey)) {
+                                continue
+                            }
+                            $processedEntries[$uniqueKey] = $true
 
-                        # Add to results
-                        $results += [PSCustomObject]@{
-                            component_id = $componentId
-                            component_name = $componentName
-                            component_type = $componentType
-                            shape_name = $shapeName
-                            script_language = $scriptLanguage
-                            folder = $folder
+                            # Look up process name
+                            $processName = if ($componentNameMap.ContainsKey($processId)) { $componentNameMap[$processId] } else { "" }
+
+                            # Add to results
+                            $results += [PSCustomObject]@{
+                                process_id = $processId
+                                process_name = $processName
+                                component_id = $componentId
+                                component_name = $componentName
+                                component_type = $componentType
+                                shape_name = $shapeName
+                                script_language = $scriptLanguage
+                                folder = $folder
+                            }
                         }
                     }
                 }
@@ -243,9 +380,9 @@ foreach ($xmlFile in $xmlFiles) {
 }
 
 # Output CSV header
-Write-Output "component_id,component_name,component_type,shape_name,script_language,folder"
+Write-Output "process_id,process_name,component_id,component_name,component_type,shape_name,script_language,folder"
 
 # Output sorted results
-$results | Sort-Object -Property component_id, shape_name | ForEach-Object {
-    Write-Output "$($_.component_id),`"$($_.component_name)`",`"$($_.component_type)`",`"$($_.shape_name)`",`"$($_.script_language)`",`"$($_.folder)`""
+$results | Sort-Object -Property process_id, component_id, shape_name | ForEach-Object {
+    Write-Output "$($_.process_id),`"$($_.process_name)`",$($_.component_id),`"$($_.component_name)`",`"$($_.component_type)`",`"$($_.shape_name)`",`"$($_.script_language)`",`"$($_.folder)`""
 }
